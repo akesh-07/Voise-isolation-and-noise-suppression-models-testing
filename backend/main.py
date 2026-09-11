@@ -1,7 +1,7 @@
 import io
 import time
 import numpy as np
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 import soundfile as sf
 import uvicorn
@@ -22,10 +22,18 @@ def startup_event():
         print(f"Error loading model on startup: {e}")
 
 @app.post("/process")
-async def process_audio(file: UploadFile = File(...)):
+async def process_audio(
+    file: UploadFile = File(...),
+    enable_enhancement: bool = Form(False)
+):
     global engine
-    if engine is None or engine.model is None:
-        return JSONResponse(status_code=500, content={"error": "Model is not loaded."})
+    if engine is None:
+        engine = SpExPlusInference()
+    if engine.model is None or engine.se_model is None:
+        try:
+            engine.load_model()
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"error": f"Failed to load model: {str(e)}"})
 
     try:
         start_time = time.time()
@@ -42,7 +50,7 @@ async def process_audio(file: UploadFile = File(...)):
             f.write(audio_bytes)
             
         # Run inference
-        result = engine.process(temp_path)
+        result = engine.process(temp_path, enable_enhancement=enable_enhancement)
         
         extracted_audio = result["extracted_audio"].squeeze().numpy()
         # Normalize extracted audio to prevent clipping/static noise
@@ -65,9 +73,20 @@ async def process_audio(file: UploadFile = File(...)):
         enrollment_io.seek(0)
         enrollment_b64 = base64.b64encode(enrollment_io.read()).decode('utf-8')
         
+        enhanced_b64 = None
+        if "enhanced_audio" in result:
+            enhanced_audio = result["enhanced_audio"].squeeze().numpy()
+            max_val = np.max(np.abs(enhanced_audio))
+            if max_val > 0:
+                enhanced_audio = enhanced_audio / max_val
+            enhanced_io = io.BytesIO()
+            sf.write(enhanced_io, enhanced_audio, sr, format="wav")
+            enhanced_io.seek(0)
+            enhanced_b64 = base64.b64encode(enhanced_io.read()).decode('utf-8')
+        
         processing_time = time.time() - start_time
         
-        return {
+        response_payload = {
             "success": True,
             "processing_time": round(processing_time, 2),
             "enrollment_start": round(result["enrollment_start_time"], 2),
@@ -76,6 +95,11 @@ async def process_audio(file: UploadFile = File(...)):
             "extracted_audio_b64": extracted_b64,
             "enrollment_audio_b64": enrollment_b64
         }
+        
+        if enhanced_b64:
+            response_payload["enhanced_audio_b64"] = enhanced_b64
+            
+        return response_payload
     except Exception as e:
         import traceback
         traceback.print_exc()

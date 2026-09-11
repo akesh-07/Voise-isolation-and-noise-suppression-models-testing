@@ -83,13 +83,18 @@ if uploaded_file is not None:
     st.subheader("1. Original Audio")
     st.audio(uploaded_file, format='audio/wav')
     
+    st.markdown("### Processing Settings")
+    processing_mode = st.radio("Select Pipeline:", ["SpEx+ Only (Isolation)", "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)"])
+    enable_enhancement = processing_mode == "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)"
+    
     if st.button("Extract Target Speaker"):
         with st.spinner("Processing... This may take a moment. (Auto-detecting enrollment segment & running SpEx+)"):
             try:
                 # Send to backend
                 files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "audio/wav")}
+                payload = {"enable_enhancement": enable_enhancement}
                 start_req = time.time()
-                response = requests.post(API_URL, files=files)
+                response = requests.post(API_URL, files=files, data=payload)
                 req_time = time.time() - start_req
                 
                 if response.status_code == 200:
@@ -98,7 +103,7 @@ if uploaded_file is not None:
                     st.success("Extraction Complete!")
                     
                     # Layout results
-                    col1, col2 = st.columns(2)
+                    col1, col2, col3 = st.columns(3)
                     
                     with col1:
                         st.subheader("2. Auto-Detected Enrollment")
@@ -108,11 +113,21 @@ if uploaded_file is not None:
                         st.audio(enrollment_bytes, format='audio/wav')
                     
                     with col2:
-                        st.subheader("3. Extracted Target Speaker")
+                        st.subheader("3a. Extracted (Isolated)")
                         st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
                         # Decode and play extracted audio
                         extracted_bytes = base64.b64decode(data['extracted_audio_b64'])
                         st.audio(extracted_bytes, format='audio/wav')
+                        
+                    with col3:
+                        if data.get('enhanced_audio_b64'):
+                            st.subheader("3b. Enhanced (Denoised)")
+                            st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
+                            # Decode and play enhanced audio
+                            enhanced_bytes = base64.b64decode(data['enhanced_audio_b64'])
+                            st.audio(enhanced_bytes, format='audio/wav')
+                        else:
+                            st.write("")
                     
                     # Metrics
                     st.markdown(f"""
