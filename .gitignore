@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+.env.*
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs and databases
+*.log
+*.sqlite3
+
+# Audio processing artifacts
+*.wav
+*.mp3
+*.flac
+
+# Streamlit config (optional)
+.streamlit/secrets.toml
+
+# Downloaded models or caches (if any are saved locally)
+checkpoints/
+models/
+*.pt
+*.pth
+
+# Jupyter Notebooks
+.ipynb_checkpoints
