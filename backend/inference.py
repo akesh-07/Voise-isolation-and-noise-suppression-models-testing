@@ -182,6 +182,13 @@ class SpExPlusInference:
         self.vad_utils = None
         self.target_sr = 8000
         
+        # Initialize noisereduce logic locally
+        try:
+            from deepfilter import DeepFilterInference
+            self.df_engine = DeepFilterInference()
+        except ImportError:
+            self.df_engine = None
+        
     def load_model(self):
         if self.model is not None and self.se_model is not None:
             return
@@ -305,13 +312,14 @@ class SpExPlusInference:
 
         return start_orig, end_orig
 
-    def process(self, audio_path: str, enable_enhancement=False):
+    def process(self, audio_path: str, enable_enhancement=False, processing_mode="spex"):
         """
         Process the uploaded audio file:
         1. Read audio and use VAD to detect enrollment
         2. Run SpEx+ to extract the target speaker (8kHz)
         3. Optionally run MossFormerGAN_SE_16K to enhance the extracted speech (8k -> 16k -> 8k)
         """
+        import time
         if self.model is None or self.se_model is None:
             self.load_model()
             
@@ -328,25 +336,55 @@ class SpExPlusInference:
         if waveform.size(0) > 1:
             waveform = waveform.mean(dim=0, keepdim=True)
             
-        # Resample to 8000Hz for SpEx+
-        if sr != self.target_sr:
-            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
-            mixture = resampler(waveform)
-        else:
-            mixture = waveform
+        stage_times = {}
 
-        # Find enrollment segment using original waveform to retain quality before downsampling
-        start_idx, end_idx = self.find_enrollment_segment(waveform, sr)
+        # Pre-denoising stage for DeepFilterNet3 (Noisereduce fallback)
+        denoised_waveform = waveform
+        if processing_mode == "deepfilter_spex":
+            t0 = time.time()
+            if self.df_engine:
+                import tempfile
+                fd, df_temp_path = tempfile.mkstemp(suffix=".wav")
+                with os.fdopen(fd, 'wb') as f:
+                    pass
+                self.df_engine.process(audio_path, df_temp_path)
+                denoised_array, denoised_sr = sf.read(df_temp_path)
+                denoised_waveform = torch.from_numpy(denoised_array).float()
+                if denoised_waveform.dim() == 1:
+                    denoised_waveform = denoised_waveform.unsqueeze(0)
+                else:
+                    denoised_waveform = denoised_waveform.transpose(0, 1)
+                if denoised_waveform.size(0) > 1:
+                    denoised_waveform = denoised_waveform.mean(dim=0, keepdim=True)
+                os.remove(df_temp_path)
+            stage_times["denoise_time"] = time.time() - t0
+            
+        # Find enrollment segment using the (possibly denoised) waveform
+        t0 = time.time()
+        start_idx, end_idx = self.find_enrollment_segment(denoised_waveform, sr)
+        stage_times["vad_time"] = time.time() - t0
         
         # Calculate timestamps in seconds
         start_time = start_idx / sr
         end_time = end_idx / sr
         
+        # Resample to 8000Hz for SpEx+
+        if sr != self.target_sr:
+            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
+            mixture = resampler(denoised_waveform)
+            # Retain original un-denoised audio for UI playback (extracting enrollment clip)
+            orig_resampled = resampler(waveform)
+        else:
+            mixture = denoised_waveform
+            orig_resampled = waveform
+        
         # Extract enrollment in 8kHz domain
         start_8k = int(start_time * self.target_sr)
         end_8k = int(end_time * self.target_sr)
         
+        # Use denoised aux for SpEx+ reference, but return original aux for UI playback
         aux = mixture[:, start_8k:end_8k]
+        orig_aux = orig_resampled[:, start_8k:end_8k]
         
         # Prepare inputs for model
         # model expects mixture (B, T), aux (B, T_aux), aux_len (B,)
@@ -357,18 +395,21 @@ class SpExPlusInference:
         
         ref = (aux_input, aux_len_input, speakers)
         
+        t0 = time.time()
         with torch.no_grad():
             output = self.model(mixture_input, ref)
             extracted_audio = output.cpu()
+        stage_times["spex_time"] = time.time() - t0
             
         result_payload = {
             "sample_rate": self.target_sr,
             "enrollment_start_time": start_time,
-            "enrollment_end_time": end_time
+            "enrollment_end_time": end_time,
+            "stage_times": stage_times
         }
         
-        if enable_enhancement:
-            # 5. Run MossFormerGAN_SE_16K
+        if enable_enhancement or processing_mode == "mossformer":
+            t0 = time.time()
             # First, upsample SpEx+ output (8kHz) to 16kHz
             resampler_16k = torchaudio.transforms.Resample(orig_freq=8000, new_freq=16000)
             enhanced_input_16k = resampler_16k(extracted_audio) # (1, time)
@@ -386,8 +427,9 @@ class SpExPlusInference:
             enhanced_audio_8k = resampler_8k(enhanced_output_16k_tensor)
             
             result_payload["enhanced_audio"] = enhanced_audio_8k.cpu()
+            stage_times["enhancement_time"] = time.time() - t0
             
         result_payload["extracted_audio"] = extracted_audio
-        result_payload["enrollment_audio"] = aux.cpu()
+        result_payload["enrollment_audio"] = orig_aux.cpu()
             
         return result_payload

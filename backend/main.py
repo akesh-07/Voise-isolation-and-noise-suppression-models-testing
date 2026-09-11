@@ -24,7 +24,8 @@ def startup_event():
 @app.post("/process")
 async def process_audio(
     file: UploadFile = File(...),
-    enable_enhancement: bool = Form(False)
+    enable_enhancement: bool = Form(None),
+    processing_mode: str = Form("spex")
 ):
     global engine
     if engine is None:
@@ -49,8 +50,12 @@ async def process_audio(
         with os.fdopen(fd, 'wb') as f:
             f.write(audio_bytes)
             
+        # Fallback for backward compatibility
+        if enable_enhancement is True:
+            processing_mode = "mossformer"
+            
         # Run inference
-        result = engine.process(temp_path, enable_enhancement=enable_enhancement)
+        result = engine.process(temp_path, enable_enhancement=False, processing_mode=processing_mode)
         
         extracted_audio = result["extracted_audio"].squeeze().numpy()
         # Normalize extracted audio to prevent clipping/static noise
@@ -89,6 +94,7 @@ async def process_audio(
         response_payload = {
             "success": True,
             "processing_time": round(processing_time, 2),
+            "stage_times": {k: round(v, 2) for k, v in result.get("stage_times", {}).items()},
             "enrollment_start": round(result["enrollment_start_time"], 2),
             "enrollment_end": round(result["enrollment_end_time"], 2),
             "sample_rate": sr,

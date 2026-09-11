@@ -84,15 +84,20 @@ if uploaded_file is not None:
     st.audio(uploaded_file, format='audio/wav')
     
     st.markdown("### Processing Settings")
-    processing_mode = st.radio("Select Pipeline:", ["SpEx+ Only (Isolation)", "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)"])
-    enable_enhancement = processing_mode == "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)"
+    pipeline_options = {
+        "SpEx+ Only (Isolation)": "spex",
+        "DeepFilterNet3 → SpEx+ (Pre-Denoising + Isolation)": "deepfilter_spex",
+        "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)": "mossformer"
+    }
+    selected_pipeline_label = st.radio("Select Pipeline:", list(pipeline_options.keys()))
+    processing_mode = pipeline_options[selected_pipeline_label]
     
     if st.button("Extract Target Speaker"):
-        with st.spinner("Processing... This may take a moment. (Auto-detecting enrollment segment & running SpEx+)"):
+        with st.spinner("Processing... This may take a moment. (Auto-detecting enrollment segment & running inference)"):
             try:
                 # Send to backend
                 files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "audio/wav")}
-                payload = {"enable_enhancement": enable_enhancement}
+                payload = {"processing_mode": processing_mode}
                 start_req = time.time()
                 response = requests.post(API_URL, files=files, data=payload)
                 req_time = time.time() - start_req
@@ -130,12 +135,41 @@ if uploaded_file is not None:
                             st.write("")
                     
                     # Metrics
-                    st.markdown(f"""
-                    <div class="metric-container">
-                        <div class="metric-label">Total Processing Time</div>
-                        <div class="metric-value">{data['processing_time']}s</div>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    stage_times = data.get("stage_times", {})
+                    metrics_html = f"""
+                    <div class="metric-container" style="display: flex; gap: 20px; flex-wrap: wrap;">
+                        <div>
+                            <div class="metric-label">Total Processing Time</div>
+                            <div class="metric-value">{data['processing_time']}s</div>
+                        </div>
+                    """
+                    if "denoise_time" in stage_times:
+                        metrics_html += f"""
+                        <div>
+                            <div class="metric-label">Pre-Denoise Time</div>
+                            <div class="metric-value">{stage_times['denoise_time']}s</div>
+                        </div>"""
+                    if "vad_time" in stage_times:
+                        metrics_html += f"""
+                        <div>
+                            <div class="metric-label">VAD Time</div>
+                            <div class="metric-value">{stage_times['vad_time']}s</div>
+                        </div>"""
+                    if "spex_time" in stage_times:
+                        metrics_html += f"""
+                        <div>
+                            <div class="metric-label">SpEx+ Time</div>
+                            <div class="metric-value">{stage_times['spex_time']}s</div>
+                        </div>"""
+                    if "enhancement_time" in stage_times:
+                        metrics_html += f"""
+                        <div>
+                            <div class="metric-label">MossFormer Time</div>
+                            <div class="metric-value">{stage_times['enhancement_time']}s</div>
+                        </div>"""
+                        
+                    metrics_html += "</div>"
+                    st.markdown(metrics_html, unsafe_allow_html=True)
                     
                 else:
                     st.error(f"Backend Error: {response.status_code} - {response.text}")

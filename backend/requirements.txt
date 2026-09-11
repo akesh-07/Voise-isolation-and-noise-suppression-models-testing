@@ -7,3 +7,4 @@ huggingface-hub
 soundfile
 numpy
 scipy
+deepfilternet
