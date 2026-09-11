@@ -105,6 +105,16 @@ async def process_audio(
         if enhanced_b64:
             response_payload["enhanced_audio_b64"] = enhanced_b64
             
+        if "denoised_audio" in result:
+            denoised_audio = result["denoised_audio"].squeeze().numpy()
+            max_val = np.max(np.abs(denoised_audio))
+            if max_val > 0:
+                denoised_audio = denoised_audio / max_val
+            denoised_io = io.BytesIO()
+            sf.write(denoised_io, denoised_audio, sr, format="wav")
+            denoised_io.seek(0)
+            response_payload["denoised_audio_b64"] = base64.b64encode(denoised_io.read()).decode('utf-8')
+            
         return response_payload
     except Exception as e:
         import traceback

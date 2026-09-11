@@ -107,6 +107,12 @@ if uploaded_file is not None:
                     
                     st.success("Extraction Complete!")
                     
+                    if data.get('denoised_audio_b64'):
+                        st.subheader("1.5 Pre-Denoised Audio (DeepFilterNet3)")
+                        st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
+                        denoised_bytes = base64.b64decode(data['denoised_audio_b64'])
+                        st.audio(denoised_bytes, format='audio/wav')
+                    
                     # Layout results
                     col1, col2, col3 = st.columns(3)
                     
@@ -135,40 +141,41 @@ if uploaded_file is not None:
                             st.write("")
                     
                     # Metrics
+                    import textwrap
                     stage_times = data.get("stage_times", {})
                     metrics_html = f"""
-                    <div class="metric-container" style="display: flex; gap: 20px; flex-wrap: wrap;">
-                        <div>
-                            <div class="metric-label">Total Processing Time</div>
-                            <div class="metric-value">{data['processing_time']}s</div>
-                        </div>
-                    """
+<div class="metric-container" style="display: flex; gap: 20px; flex-wrap: wrap;">
+    <div>
+        <div class="metric-label">Total Processing Time</div>
+        <div class="metric-value">{data['processing_time']}s</div>
+    </div>
+"""
                     if "denoise_time" in stage_times:
                         metrics_html += f"""
-                        <div>
-                            <div class="metric-label">Pre-Denoise Time</div>
-                            <div class="metric-value">{stage_times['denoise_time']}s</div>
-                        </div>"""
+    <div>
+        <div class="metric-label">Pre-Denoise Time</div>
+        <div class="metric-value">{stage_times['denoise_time']}s</div>
+    </div>"""
                     if "vad_time" in stage_times:
                         metrics_html += f"""
-                        <div>
-                            <div class="metric-label">VAD Time</div>
-                            <div class="metric-value">{stage_times['vad_time']}s</div>
-                        </div>"""
+    <div>
+        <div class="metric-label">VAD Time</div>
+        <div class="metric-value">{stage_times['vad_time']}s</div>
+    </div>"""
                     if "spex_time" in stage_times:
                         metrics_html += f"""
-                        <div>
-                            <div class="metric-label">SpEx+ Time</div>
-                            <div class="metric-value">{stage_times['spex_time']}s</div>
-                        </div>"""
+    <div>
+        <div class="metric-label">SpEx+ Time</div>
+        <div class="metric-value">{stage_times['spex_time']}s</div>
+    </div>"""
                     if "enhancement_time" in stage_times:
                         metrics_html += f"""
-                        <div>
-                            <div class="metric-label">MossFormer Time</div>
-                            <div class="metric-value">{stage_times['enhancement_time']}s</div>
-                        </div>"""
+    <div>
+        <div class="metric-label">MossFormer Time</div>
+        <div class="metric-value">{stage_times['enhancement_time']}s</div>
+    </div>"""
                         
-                    metrics_html += "</div>"
+                    metrics_html += "\n</div>"
                     st.markdown(metrics_html, unsafe_allow_html=True)
                     
                 else:

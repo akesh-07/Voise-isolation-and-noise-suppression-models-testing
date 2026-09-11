@@ -340,6 +340,7 @@ class SpExPlusInference:
 
         # Pre-denoising stage for DeepFilterNet3 (Noisereduce fallback)
         denoised_waveform = waveform
+        current_sr = sr
         if processing_mode == "deepfilter_spex":
             t0 = time.time()
             if self.df_engine:
@@ -350,6 +351,7 @@ class SpExPlusInference:
                 self.df_engine.process(audio_path, df_temp_path)
                 denoised_array, denoised_sr = sf.read(df_temp_path)
                 denoised_waveform = torch.from_numpy(denoised_array).float()
+                current_sr = denoised_sr
                 if denoised_waveform.dim() == 1:
                     denoised_waveform = denoised_waveform.unsqueeze(0)
                 else:
@@ -361,21 +363,24 @@ class SpExPlusInference:
             
         # Find enrollment segment using the (possibly denoised) waveform
         t0 = time.time()
-        start_idx, end_idx = self.find_enrollment_segment(denoised_waveform, sr)
+        start_idx, end_idx = self.find_enrollment_segment(denoised_waveform, current_sr)
         stage_times["vad_time"] = time.time() - t0
         
         # Calculate timestamps in seconds
-        start_time = start_idx / sr
-        end_time = end_idx / sr
+        start_time = start_idx / current_sr
+        end_time = end_idx / current_sr
         
         # Resample to 8000Hz for SpEx+
-        if sr != self.target_sr:
-            resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
+        if current_sr != self.target_sr:
+            resampler = torchaudio.transforms.Resample(orig_freq=current_sr, new_freq=self.target_sr)
             mixture = resampler(denoised_waveform)
-            # Retain original un-denoised audio for UI playback (extracting enrollment clip)
-            orig_resampled = resampler(waveform)
         else:
             mixture = denoised_waveform
+            
+        if sr != self.target_sr:
+            resampler_orig = torchaudio.transforms.Resample(orig_freq=sr, new_freq=self.target_sr)
+            orig_resampled = resampler_orig(waveform)
+        else:
             orig_resampled = waveform
         
         # Extract enrollment in 8kHz domain
@@ -431,5 +436,7 @@ class SpExPlusInference:
             
         result_payload["extracted_audio"] = extracted_audio
         result_payload["enrollment_audio"] = orig_aux.cpu()
+        if processing_mode == "deepfilter_spex":
+            result_payload["denoised_audio"] = mixture.cpu()
             
         return result_payload
