@@ -85,7 +85,9 @@ class SpExPlusInference:
         
         # Load state dict
         checkpoint = torch.load(best_ckpt_path, map_location='cpu')
-        if 'model_state_dict' in checkpoint:
+        if 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        elif 'model_state_dict' in checkpoint:
             state_dict = checkpoint['model_state_dict']
         else:
             state_dict = checkpoint

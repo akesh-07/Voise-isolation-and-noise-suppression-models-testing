@@ -1,5 +1,6 @@
 import io
 import time
+import numpy as np
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import JSONResponse
 import soundfile as sf
@@ -44,6 +45,11 @@ async def process_audio(file: UploadFile = File(...)):
         result = engine.process(temp_path)
         
         extracted_audio = result["extracted_audio"].squeeze().numpy()
+        # Normalize extracted audio to prevent clipping/static noise
+        max_val = np.max(np.abs(extracted_audio))
+        if max_val > 0:
+            extracted_audio = extracted_audio / max_val
+            
         enrollment_audio = result["enrollment_audio"].squeeze().numpy()
         sr = result["sample_rate"]
         
