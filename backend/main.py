@@ -34,6 +34,8 @@ async def process_audio(
         try:
             engine.load_model()
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return JSONResponse(status_code=500, content={"error": f"Failed to load model: {str(e)}"})
 
     try:
@@ -63,7 +65,10 @@ async def process_audio(
         if max_val > 0:
             extracted_audio = extracted_audio / max_val
             
-        enrollment_audio = result["enrollment_audio"].squeeze().numpy()
+        enrollment_audio = result.get("enrollment_audio")
+        if enrollment_audio is not None:
+            enrollment_audio = enrollment_audio.squeeze().numpy()
+            
         sr = result["sample_rate"]
         
         # Convert extracted audio to base64
@@ -72,11 +77,13 @@ async def process_audio(
         extracted_io.seek(0)
         extracted_b64 = base64.b64encode(extracted_io.read()).decode('utf-8')
         
-        # Convert enrollment audio to base64
-        enrollment_io = io.BytesIO()
-        sf.write(enrollment_io, enrollment_audio, sr, format="wav")
-        enrollment_io.seek(0)
-        enrollment_b64 = base64.b64encode(enrollment_io.read()).decode('utf-8')
+        # Convert enrollment audio to base64 if present
+        enrollment_b64 = None
+        if enrollment_audio is not None:
+            enrollment_io = io.BytesIO()
+            sf.write(enrollment_io, enrollment_audio, sr, format="wav")
+            enrollment_io.seek(0)
+            enrollment_b64 = base64.b64encode(enrollment_io.read()).decode('utf-8')
         
         enhanced_b64 = None
         if "enhanced_audio" in result:
@@ -95,12 +102,16 @@ async def process_audio(
             "success": True,
             "processing_time": round(processing_time, 2),
             "stage_times": {k: round(v, 2) for k, v in result.get("stage_times", {}).items()},
-            "enrollment_start": round(result["enrollment_start_time"], 2),
-            "enrollment_end": round(result["enrollment_end_time"], 2),
             "sample_rate": sr,
-            "extracted_audio_b64": extracted_b64,
-            "enrollment_audio_b64": enrollment_b64
+            "extracted_audio_b64": extracted_b64
         }
+        
+        if "enrollment_start_time" in result:
+            response_payload["enrollment_start"] = round(result["enrollment_start_time"], 2)
+        if "enrollment_end_time" in result:
+            response_payload["enrollment_end"] = round(result["enrollment_end_time"], 2)
+        if enrollment_b64:
+            response_payload["enrollment_audio_b64"] = enrollment_b64
         
         if enhanced_b64:
             response_payload["enhanced_audio_b64"] = enhanced_b64

@@ -2,6 +2,7 @@ import os
 import sys
 import torch
 import torchaudio
+import soundfile as sf
 from huggingface_hub import snapshot_download
 import numpy as np
 import importlib.util
@@ -182,12 +183,19 @@ class SpExPlusInference:
         self.vad_utils = None
         self.target_sr = 8000
         
-        # Initialize noisereduce logic locally
+        # Initialize noisereduce/deepfilter logic locally
         try:
             from deepfilter import DeepFilterInference
             self.df_engine = DeepFilterInference()
         except ImportError:
             self.df_engine = None
+            
+        # Initialize GTCRN logic locally
+        try:
+            from gtcrn import GTCRNInference
+            self.gtcrn_engine = GTCRNInference()
+        except ImportError:
+            self.gtcrn_engine = None
         
     def load_model(self):
         if self.model is not None and self.se_model is not None:
@@ -338,7 +346,33 @@ class SpExPlusInference:
             
         stage_times = {}
 
-        # Pre-denoising stage for DeepFilterNet3 (Noisereduce fallback)
+        # GTCRN mode (Independent Pipeline)
+        if processing_mode == "gtcrn":
+            t0 = time.time()
+            if self.gtcrn_engine:
+                import tempfile
+                fd, temp_path = tempfile.mkstemp(suffix=".wav")
+                with os.fdopen(fd, 'wb') as f:
+                    pass
+                self.gtcrn_engine.process(audio_path, temp_path)
+                gtcrn_array, gtcrn_sr = sf.read(temp_path)
+                gtcrn_waveform = torch.from_numpy(gtcrn_array).float()
+                if gtcrn_waveform.dim() == 1:
+                    gtcrn_waveform = gtcrn_waveform.unsqueeze(0)
+                else:
+                    gtcrn_waveform = gtcrn_waveform.transpose(0, 1)
+                os.remove(temp_path)
+            else:
+                raise RuntimeError("GTCRN engine could not be loaded.")
+            stage_times["gtcrn_time"] = time.time() - t0
+            
+            return {
+                "sample_rate": 16000,
+                "stage_times": stage_times,
+                "extracted_audio": gtcrn_waveform.cpu()
+            }
+            
+        # Pre-denoising stage for DeepFilterNet3
         denoised_waveform = waveform
         current_sr = sr
         if processing_mode == "deepfilter_spex":
@@ -387,14 +421,20 @@ class SpExPlusInference:
         start_8k = int(start_time * self.target_sr)
         end_8k = int(end_time * self.target_sr)
         
-        # Use denoised aux for SpEx+ reference, but return original aux for UI playback
-        aux = mixture[:, start_8k:end_8k]
         orig_aux = orig_resampled[:, start_8k:end_8k]
         
-        # Prepare inputs for model
-        # model expects mixture (B, T), aux (B, T_aux), aux_len (B,)
-        mixture_input = mixture.to(self.device)
-        aux_input = aux.to(self.device)
+        # Use the original raw audio for SpEx+ isolation!
+        # DeepFilterNet applies non-linear phase/spectral distortions that confuse SpEx+'s time-domain 
+        # 1D-CNN encoder. By using the DeepFilterNet output exclusively for VAD timestamp detection, 
+        # we ensure perfect enrollment, while giving SpEx+ the raw linear audio it requires to isolate properly.
+        aux_input = orig_aux.to(self.device)
+        if processing_mode == "deepfilter_spex":
+            # For the mixture, passing the highly non-linear denoised audio breaks the isolation mask.
+            # We must pass the original resampled audio to SpEx+.
+            mixture_input = orig_resampled.to(self.device)
+        else:
+            mixture_input = mixture.to(self.device)
+            
         aux_len_input = torch.tensor([aux_input.shape[1]], dtype=torch.long).to(self.device)
         speakers = torch.tensor([-1]).to(self.device) # -1 to bypass speaker classification accuracy calculation
         

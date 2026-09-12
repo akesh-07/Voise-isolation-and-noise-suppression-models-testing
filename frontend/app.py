@@ -87,7 +87,8 @@ if uploaded_file is not None:
     pipeline_options = {
         "SpEx+ Only (Isolation)": "spex",
         "DeepFilterNet3 → SpEx+ (Pre-Denoising + Isolation)": "deepfilter_spex",
-        "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)": "mossformer"
+        "SpEx+ + MossFormerGAN (Isolation + Noise Suppression)": "mossformer",
+        "GTCRN (Streaming Noise Suppression)": "gtcrn"
     }
     selected_pipeline_label = st.radio("Select Pipeline:", list(pipeline_options.keys()))
     processing_mode = pipeline_options[selected_pipeline_label]
@@ -107,38 +108,47 @@ if uploaded_file is not None:
                     
                     st.success("Extraction Complete!")
                     
-                    if data.get('denoised_audio_b64'):
-                        st.subheader("1.5 Pre-Denoised Audio (DeepFilterNet3)")
+                    if processing_mode == "gtcrn":
+                        st.subheader("2. Cleaned Audio (GTCRN)")
                         st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
-                        denoised_bytes = base64.b64decode(data['denoised_audio_b64'])
-                        st.audio(denoised_bytes, format='audio/wav')
-                    
-                    # Layout results
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        st.subheader("2. Auto-Detected Enrollment")
-                        st.write(f"Segment from **{data['enrollment_start']}s** to **{data['enrollment_end']}s**")
-                        # Decode and play enrollment
-                        enrollment_bytes = base64.b64decode(data['enrollment_audio_b64'])
-                        st.audio(enrollment_bytes, format='audio/wav')
-                    
-                    with col2:
-                        st.subheader("3a. Extracted (Isolated)")
-                        st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
-                        # Decode and play extracted audio
+                        # Decode and play extracted audio (which is the GTCRN audio)
                         extracted_bytes = base64.b64decode(data['extracted_audio_b64'])
                         st.audio(extracted_bytes, format='audio/wav')
-                        
-                    with col3:
-                        if data.get('enhanced_audio_b64'):
-                            st.subheader("3b. Enhanced (Denoised)")
+                    else:
+                        if data.get('denoised_audio_b64'):
+                            st.subheader("1.5 Pre-Denoised Audio (DeepFilterNet3)")
                             st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
-                            # Decode and play enhanced audio
-                            enhanced_bytes = base64.b64decode(data['enhanced_audio_b64'])
-                            st.audio(enhanced_bytes, format='audio/wav')
-                        else:
-                            st.write("")
+                            denoised_bytes = base64.b64decode(data['denoised_audio_b64'])
+                            st.audio(denoised_bytes, format='audio/wav')
+                        
+                        # Layout results
+                        col1, col2, col3 = st.columns(3)
+                        
+                        with col1:
+                            st.subheader("2. Auto-Detected Enrollment")
+                            if "enrollment_start" in data and "enrollment_end" in data:
+                                st.write(f"Segment from **{data['enrollment_start']}s** to **{data['enrollment_end']}s**")
+                            # Decode and play enrollment
+                            if data.get('enrollment_audio_b64'):
+                                enrollment_bytes = base64.b64decode(data['enrollment_audio_b64'])
+                                st.audio(enrollment_bytes, format='audio/wav')
+                        
+                        with col2:
+                            st.subheader("3a. Extracted (Isolated)")
+                            st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
+                            # Decode and play extracted audio
+                            extracted_bytes = base64.b64decode(data['extracted_audio_b64'])
+                            st.audio(extracted_bytes, format='audio/wav')
+                            
+                        with col3:
+                            if data.get('enhanced_audio_b64'):
+                                st.subheader("3b. Enhanced (Denoised)")
+                                st.write(f"Sample Rate: **{data['sample_rate']} Hz**")
+                                # Decode and play enhanced audio
+                                enhanced_bytes = base64.b64decode(data['enhanced_audio_b64'])
+                                st.audio(enhanced_bytes, format='audio/wav')
+                            else:
+                                st.write("")
                     
                     # Metrics
                     import textwrap
@@ -167,6 +177,12 @@ if uploaded_file is not None:
     <div>
         <div class="metric-label">SpEx+ Time</div>
         <div class="metric-value">{stage_times['spex_time']}s</div>
+    </div>"""
+                    if "gtcrn_time" in stage_times:
+                        metrics_html += f"""
+    <div>
+        <div class="metric-label">GTCRN Time</div>
+        <div class="metric-value">{stage_times['gtcrn_time']}s</div>
     </div>"""
                     if "enhancement_time" in stage_times:
                         metrics_html += f"""
