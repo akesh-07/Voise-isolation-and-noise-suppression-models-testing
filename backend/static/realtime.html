@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time GTCRN Denoising</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 2rem; background: #0e1117; color: white; display: flex; flex-direction: column; align-items: center; }
+        h1 { margin-bottom: 0.5rem; }
+        p { color: #a3a8b8; margin-bottom: 2rem; text-align: center; max-width: 600px; }
+        .controls { display: flex; gap: 1rem; margin-bottom: 2rem; }
+        button { padding: 0.75rem 1.5rem; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; background: #ff4b4b; color: white; transition: opacity 0.2s; }
+        button:hover { opacity: 0.8; }
+        button:disabled { background: #333; cursor: not-allowed; }
+        #startBtn { background: #00cc66; }
+        .status { padding: 1rem; border-radius: 8px; background: #1e2129; width: 100%; max-width: 600px; }
+        .status-item { display: flex; justify-content: space-between; margin-bottom: 0.5rem; }
+        .status-label { font-weight: bold; color: #a3a8b8; }
+        .status-value { font-family: monospace; }
+        .connected { color: #00cc66; }
+        .disconnected { color: #ff4b4b; }
+    </style>
+</head>
+<body>
+
+    <h1>Real-time Denoising Stream</h1>
+    <p>Sub-50ms latency using GTCRN and WebSockets. Speak into your microphone and hear the denoised audio played back instantly.</p>
+
+    <div class="controls">
+        <button id="startBtn">Start Streaming</button>
+        <button id="stopBtn" disabled>Stop Streaming</button>
+    </div>
+
+    <div class="status">
+        <div class="status-item">
+            <span class="status-label">WebSocket Status</span>
+            <span class="status-value disconnected" id="wsStatus">Disconnected</span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Mic Status</span>
+            <span class="status-value disconnected" id="micStatus">Off</span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Latency (Round Trip)</span>
+            <span class="status-value" id="latencyVal">--- ms</span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Bytes Received</span>
+            <span class="status-value" id="bytesVal">0</span>
+        </div>
+    </div>
+
+    <script>
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const wsStatus = document.getElementById('wsStatus');
+        const micStatus = document.getElementById('micStatus');
+        const latencyVal = document.getElementById('latencyVal');
+        const bytesVal = document.getElementById('bytesVal');
+
+        let audioContext;
+        let ws;
+        let mediaStream;
+        let workletNode;
+        let totalBytes = 0;
+        let pings = [];
+
+        async function start() {
+            try {
+                // Initialize WebSocket
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                // Fallback to localhost:8000 if opened directly from file system
+                const host = window.location.host || 'localhost:8000'; 
+                ws = new WebSocket(`${protocol}//${host}/ws/gtcrn`);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = () => {
+                    wsStatus.textContent = 'Connected';
+                    wsStatus.className = 'status-value connected';
+                };
+
+                ws.onclose = () => {
+                    wsStatus.textContent = 'Disconnected';
+                    wsStatus.className = 'status-value disconnected';
+                    stop();
+                };
+
+                ws.onmessage = (event) => {
+                    // Update stats
+                    totalBytes += event.data.byteLength;
+                    bytesVal.textContent = totalBytes.toLocaleString();
+                    
+                    if (pings.length > 0) {
+                        const latency = performance.now() - pings.shift();
+                        latencyVal.textContent = `${latency.toFixed(1)} ms`;
+                    }
+
+                    // Send received PCM data to worklet for playback
+                    if (workletNode) {
+                        workletNode.port.postMessage({
+                            type: 'play',
+                            buffer: event.data
+                        }, [event.data]);
+                    }
+                };
+
+                // Initialize Audio Context at 16kHz
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                
+                // Get Microphone
+                mediaStream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                    } 
+                });
+                micStatus.textContent = 'Active (16kHz)';
+                micStatus.className = 'status-value connected';
+
+                if (!audioContext) {
+                    console.log('Stream stopped before mic access completed');
+                    return;
+                }
+
+                // Load AudioWorklet
+                // Use absolute path for processor if running locally
+                await audioContext.audioWorklet.addModule('/static/processor.js');
+
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                workletNode = new AudioWorkletNode(audioContext, 'realtime-processor', {
+                    outputChannelCount: [1]
+                });
+
+                workletNode.port.onmessage = (event) => {
+                    if (event.data.type === 'chunk') {
+                        // We have exactly 256 samples from the mic
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            pings.push(performance.now());
+                            ws.send(event.data.buffer);
+                        }
+                    }
+                };
+
+                source.connect(workletNode);
+                workletNode.connect(audioContext.destination);
+
+                startBtn.disabled = true;
+                stopBtn.disabled = false;
+
+            } catch (err) {
+                console.error('Error starting real-time stream:', err);
+                alert(`Error: ${err.message}`);
+                stop();
+            }
+        }
+
+        function stop() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
+            micStatus.textContent = 'Off';
+            micStatus.className = 'status-value disconnected';
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            pings = [];
+        }
+
+        startBtn.addEventListener('click', start);
+        stopBtn.addEventListener('click', stop);
+    </script>
+</body>
+</html>

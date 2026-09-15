@@ -1,14 +1,17 @@
 import io
 import time
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 import soundfile as sf
 import uvicorn
 import base64
 from inference import SpExPlusInference
+from gtcrn import GTCRNStreamSession
 
 app = FastAPI(title="ClearerVoice SpEx+ Backend")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 engine = None
 
 @app.on_event("startup")
@@ -131,6 +134,46 @@ async def process_audio(
         import traceback
         traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.websocket("/ws/gtcrn")
+async def websocket_gtcrn(websocket: WebSocket):
+    await websocket.accept()
+    global engine
+    if engine is None:
+        engine = SpExPlusInference()
+        try:
+            engine.load_model()
+        except Exception as e:
+            print(f"Error loading model for WS: {e}")
+            await websocket.close(code=1011)
+            return
+            
+    if getattr(engine, 'gtcrn_engine', None) is None:
+        print("GTCRN engine not loaded")
+        await websocket.close(code=1011)
+        return
+        
+    stream_session = GTCRNStreamSession(engine.gtcrn_engine)
+    
+    try:
+        while True:
+            data = await websocket.receive_bytes()
+            chunk_array = np.frombuffer(data, dtype=np.float32)
+            
+            # process_chunk expects exactly 256 samples
+            if len(chunk_array) != 256:
+                if len(chunk_array) < 256:
+                    chunk_array = np.pad(chunk_array, (0, 256 - len(chunk_array)))
+                else:
+                    chunk_array = chunk_array[:256]
+                    
+            out_chunk = stream_session.process_chunk(chunk_array)
+            await websocket.send_bytes(out_chunk.tobytes())
+            
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        print(f"WebSocket error: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

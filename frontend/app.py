@@ -70,6 +70,14 @@ st.markdown("""
 st.title("🎙️ ClearerVoice TSE")
 st.markdown("**Target Speaker Extraction (Audio-Only) using SpEx+**")
 
+st.markdown("""
+<div style="background-color: #1f2937; padding: 15px; border-radius: 8px; border-left: 4px solid #00cc66; margin-bottom: 20px;">
+    <h3 style="margin-top: 0; color: #00cc66;">🚀 New Feature: Real-time Streaming</h3>
+    <p>We've added a sub-50ms latency WebSocket stream for the GTCRN pipeline.</p>
+    <a href="http://localhost:8000/static/realtime.html" target="_blank" style="display: inline-block; background-color: #00cc66; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; font-weight: bold;">Launch Real-time Live Stream</a>
+</div>
+""", unsafe_allow_html=True)
+
 # --- Configuration ---
 API_URL = "http://localhost:8000/process"
 

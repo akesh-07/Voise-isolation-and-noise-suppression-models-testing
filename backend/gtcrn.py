@@ -93,3 +93,60 @@ class GTCRNInference:
         sf.write(output_path, output_audio, 16000, format='wav')
         
         return output_path
+
+class GTCRNStreamSession:
+    def __init__(self, inference_engine: GTCRNInference):
+        self.engine = inference_engine
+        self.conv_cache = np.zeros([2, 1, 16, 16, 33], dtype=np.float32)
+        self.tra_cache = np.zeros([2, 3, 1, 1, 16], dtype=np.float32)
+        self.inter_cache = np.zeros([2, 1, 33, 16], dtype=np.float32)
+        
+        self.prev_chunk = np.zeros(256, dtype=np.float32)
+        self.overlap_buffer = np.zeros(256, dtype=np.float32)
+        
+    def process_chunk(self, new_chunk: np.ndarray) -> np.ndarray:
+        assert len(new_chunk) == 256, f"Expected chunk length 256, got {len(new_chunk)}"
+        
+        # Form 512-sample frame
+        frame = np.concatenate([self.prev_chunk, new_chunk])
+        self.prev_chunk = new_chunk.copy()
+        
+        # Apply analysis window
+        frame = frame * self.engine.window
+        
+        # FFT
+        frame_tensor = torch.from_numpy(frame)
+        stft_frame = torch.fft.rfft(frame_tensor, n=512)
+        
+        # Format for GTCRN input
+        mix_real = stft_frame.real.numpy()
+        mix_imag = stft_frame.imag.numpy()
+        mix_np = np.stack([mix_real, mix_imag], axis=-1)
+        mix_np = np.reshape(mix_np, (1, 257, 1, 2)).astype(np.float32)
+        
+        inputs = {
+            'mix': mix_np,
+            'conv_cache': self.conv_cache,
+            'tra_cache': self.tra_cache,
+            'inter_cache': self.inter_cache
+        }
+        
+        # Streaming Inference Step
+        out = self.engine.session.run(None, inputs)
+        enh, self.conv_cache, self.tra_cache, self.inter_cache = out
+        
+        # Parse output back to complex tensor
+        enh_real = enh[0, :, 0, 0]
+        enh_imag = enh[0, :, 0, 1]
+        enh_complex = torch.complex(torch.from_numpy(enh_real), torch.from_numpy(enh_imag))
+        
+        # Inverse FFT
+        enh_frame = torch.fft.irfft(enh_complex, n=512).numpy()
+        
+        # Synthesis window & Overlap-Add
+        enh_frame = enh_frame * self.engine.window
+        
+        out_chunk = enh_frame[:256] + self.overlap_buffer
+        self.overlap_buffer = enh_frame[256:]
+        
+        return out_chunk
