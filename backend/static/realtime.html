@@ -30,6 +30,13 @@
         <button id="startBtn">Start Streaming</button>
         <button id="stopBtn" disabled>Stop Streaming</button>
     </div>
+    
+    <div style="margin-bottom: 2rem;">
+        <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; color: #a3a8b8;">
+            <input type="checkbox" id="bypassToggle" style="width: 18px; height: 18px;"> 
+            <span>Bypass GTCRN Denoising (Hear Raw Microphone)</span>
+        </label>
+    </div>
 
     <div class="status">
         <div class="status-item">
@@ -57,6 +64,7 @@
         const micStatus = document.getElementById('micStatus');
         const latencyVal = document.getElementById('latencyVal');
         const bytesVal = document.getElementById('bytesVal');
+        const bypassToggle = document.getElementById('bypassToggle');
 
         let audioContext;
         let ws;
@@ -115,8 +123,14 @@
                         autoGainControl: false,
                     } 
                 });
-                micStatus.textContent = 'Active (16kHz)';
+                
+                const actualRate = audioContext.sampleRate;
+                micStatus.textContent = `Active (${actualRate} Hz)`;
                 micStatus.className = 'status-value connected';
+                
+                if (actualRate !== 16000) {
+                    alert(`Warning: Your browser forced the sample rate to ${actualRate}Hz instead of 16000Hz. The AI model expects 16kHz and may not suppress noise correctly!`);
+                }
 
                 if (!audioContext) {
                     console.log('Stream stopped before mic access completed');
@@ -143,7 +157,13 @@
                 };
 
                 source.connect(workletNode);
-                workletNode.connect(audioContext.destination);
+                
+                // Set initial routing based on bypass toggle
+                if (bypassToggle.checked) {
+                    source.connect(audioContext.destination);
+                } else {
+                    workletNode.connect(audioContext.destination);
+                }
 
                 startBtn.disabled = true;
                 stopBtn.disabled = false;
@@ -178,6 +198,24 @@
 
         startBtn.addEventListener('click', start);
         stopBtn.addEventListener('click', stop);
+        
+        bypassToggle.addEventListener('change', (e) => {
+            if (!audioContext || !mediaStream || !workletNode) return;
+            
+            const source = audioContext.createMediaStreamSource(mediaStream);
+            
+            if (e.target.checked) {
+                // Bypass: Connect raw mic to speakers, disconnect worklet from speakers
+                try { workletNode.disconnect(audioContext.destination); } catch(err){}
+                try { source.connect(audioContext.destination); } catch(err){}
+            } else {
+                // Denoise: Connect worklet to speakers, disconnect raw mic from speakers
+                try { source.disconnect(audioContext.destination); } catch(err){}
+                // Reconnect source to worklet just in case disconnect removed all
+                try { source.connect(workletNode); } catch(err){} 
+                try { workletNode.connect(audioContext.destination); } catch(err){}
+            }
+        });
     </script>
 </body>
 </html>
